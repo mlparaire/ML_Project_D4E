@@ -58,13 +58,27 @@ class initial_data:
 
         self.main = self.main.iloc[:,[not x.endswith('_y') for x in self.main.columns]]
         self.main.columns = [x.replace('_x','') for x in self.main.columns]
-        self.main=self.main.drop(['X','Y'],axis=1)
+        self.main=self.main.drop(['X','Y','LAT','Long'],axis=1)
     def __len__(self):
         return len(self.main)
 
-    def preprocessing(self):
-        for type in map(lambda x: x,self.main):
-            print(type)
+    def preprocessing(self) -> pd.DataFrame:
+        self.enc = OneHotEncoder(handle_unknown='ignore')
+        self.__string_vars =  list(self.main.dtypes == 'object')
+        self.main.loc[:,self.__string_vars] = self.main.loc[:,self.__string_vars].fillna('Missing').astype(str)
+        self.enc.fit(self.main.select_dtypes('object'))
 
+        print(self.main.loc[:,[not x for x in self.__string_vars]].merge(pd.DataFrame(self.enc.transform(self.main.select_dtypes('object')).toarray(),columns = self.enc.get_feature_names_out(self.main.select_dtypes('object').columns)),
+                                                                         right_index=True))
+
+        #print(pd.DataFrame(self.transform.toarray()))
+#        self.transformed = pd.DataFrame(self.enc.fit_transform(self.main.loc[:,self.__string_vars]))
+#        print(self.transformed)
+
+
+
+#        self.__cat_indx = [self.main.columns.get_loc(x) for x in self.__string_vars]
+#        print(type(self.__string_vars))
 learning = initial_data(learning_vars)
-print(learning.preprocessing())
+learning.preprocessing()
+7
