@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import accuracy_score, f1_score, log_loss, confusion_matrix, classification_report
 
 learning_vars = {
@@ -62,23 +63,48 @@ class initial_data:
     def __len__(self):
         return len(self.main)
 
-    def preprocessing(self) -> pd.DataFrame:
+    def preprocessing(self,is_train: bool):
         self.enc = OneHotEncoder(handle_unknown='ignore')
+        y = self.main["target"].astype("string").fillna("__MISSING_TARGET__")
+        self.main.drop(columns=["target"],inplace=True)
         self.__string_vars =  list(self.main.dtypes == 'object')
+#        print(self.main.loc[:,[not x for x in self.__string_vars]].columns)
         self.main.loc[:,self.__string_vars] = self.main.loc[:,self.__string_vars].fillna('Missing').astype(str)
         self.enc.fit(self.main.select_dtypes('object'))
+        print('Merging Dataset')
+        return (y,pd.concat([self.main.loc[:,[not x for x in self.__string_vars]],
+                          pd.DataFrame(self.enc.transform(self.main.select_dtypes('object')).toarray(),
+                                       columns = self.enc.get_feature_names_out(self.main.select_dtypes('object').columns)),],
+                         axis=1)) if is_train else pd.concat([self.main.loc[:,[not x for x in self.__string_vars]],
+                          pd.DataFrame(self.enc.transform(self.main.select_dtypes('object')).toarray(),
+                                       columns = self.enc.get_feature_names_out(self.main.select_dtypes('object').columns)),],
+                         axis=1)
 
-        print(self.main.loc[:,[not x for x in self.__string_vars]].merge(pd.DataFrame(self.enc.transform(self.main.select_dtypes('object')).toarray(),columns = self.enc.get_feature_names_out(self.main.select_dtypes('object').columns)),
-                                                                         right_index=True))
 
-        #print(pd.DataFrame(self.transform.toarray()))
-#        self.transformed = pd.DataFrame(self.enc.fit_transform(self.main.loc[:,self.__string_vars]))
-#        print(self.transformed)
-
-
-
-#        self.__cat_indx = [self.main.columns.get_loc(x) for x in self.__string_vars]
-#        print(type(self.__string_vars))
 learning = initial_data(learning_vars)
-learning.preprocessing()
-7
+testing = initial_data(test_vars)
+
+y,train = learning.preprocessing(is_train=True)
+test = learning.preprocessing(is_train=False)
+
+test_uid = test["UID"].copy()
+
+train.drop(columns=["UID"], inplace=True)
+test.drop(columns=["UID"], inplace=True)
+
+best_params, _ = grid_search_catboost(X, y, cat_idx, seed=SEED)
+
+# other fixed training params
+base_params = dict(
+    loss_function="Logloss",
+    iterations=500,
+    od_type="Iter",
+    od_wait=50,
+    random_seed=SEED,
+    thread_count=-1,
+    verbose=False,
+    **best_params
+)
+#print(train.columns)
+
+
