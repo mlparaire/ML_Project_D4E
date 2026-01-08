@@ -1,3 +1,4 @@
+import json
 import os
 import pandas as pd
 import numpy as np
@@ -6,32 +7,9 @@ from sklearn.model_selection import RepeatedKFold, train_test_split
 from sklearn.metrics import accuracy_score, f1_score, log_loss, confusion_matrix, classification_report
 from catboost import CatBoostClassifier, Pool
 
-learning_vars = {
-        'main' : "learn_dataset.csv",
-        'job' : "learn_dataset_job.csv",
-        'job_security' : "learn_dataset_JOB_SECURITY.csv",
-        'retired_jobs' : "learn_dataset_retired_jobs.csv",
-        'retired_formers' : "learn_dataset_retired_former.csv",
-        'retired_pension' : "learn_dataset_JOB_SECURITY.csv",
-        'sport': "learn_dataset_sport.csv",
-}
-
-test_vars = {
-    'main': "test_dataset.csv",
-    'job': "test_dataset_job.csv",
-    'job_security': "test_dataset_JOB_SECURITY.csv",
-    'retired_jobs': "test_dataset_retired_jobs.csv",
-    'retired_formers': "test_dataset_retired_former.csv",
-    'retired_pension': "test_dataset_JOB_SECURITY.csv",
-    'sport': "test_dataset_sport.csv",
-}
-
-geography = {
-    'adm' : 'city_adm.csv',
-    'loc' : 'city_loc.csv',
-    'pop' : 'city_pop.csv'
-}
-
+test_vars = json.load(open('./catboost_params/test_vars.json',"r"))
+learning_vars = json.load(open('./catboost_params/learning_vars.json',"r"))
+geography = json.load(open('./catboost_params/geography.json',"r"))
 
 def make_path(begin:str, end:str) -> str:
     return os.path.join(os.path.abspath(begin), end)
@@ -159,13 +137,15 @@ class initial_data:
             "learning_rate": float(best["learning_rate"]),
             "l2_leaf_reg": float(best["l2_leaf_reg"]),
         }
-        return best_params
+        json.dump(best_params,open('./catboost_params/best_params.json','w'))
         print("BEST PARAMS:", best_params)
         print("BEST CV:", {
             "cv_f1_macro_mean": best["cv_f1_macro_mean"],
             "cv_acc_mean": best["cv_acc_mean"],
             "cv_logloss_mean": best["cv_logloss_mean"],
         })
+
+        return best_params
 
     @check_if_train
     def get_train_split(self):
