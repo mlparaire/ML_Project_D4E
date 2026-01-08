@@ -64,16 +64,19 @@ class initial_data:
     def __len__(self):
         return len(self.main)
 
-    def preprocessing(self,is_train: bool):
+    def preprocessing(self,is_train: bool) -> (pd.Series,pd.DataFrame):
         self.enc = OneHotEncoder(handle_unknown='ignore')
-        y = self.main["target"].astype("string").fillna("__MISSING_TARGET__")
-        self.main.drop(columns=["target"],inplace=True)
+        if is_train:
+            y = self.main["target"].astype("string").fillna("__MISSING_TARGET__")
+            self.main.drop(columns=["target"], inplace=True)
+        else:
+            y=''
         self.__string_vars =  list(self.main.dtypes == 'object')
 #        print(self.main.loc[:,[not x for x in self.__string_vars]].columns)
         self.main.loc[:,self.__string_vars] = self.main.loc[:,self.__string_vars].fillna('Missing').astype(str)
         self.enc.fit(self.main.select_dtypes('object'))
         print('Merging Dataset')
-        return (self.main.loc[:,self.__string_vars].columns,self.__string_vars,y,pd.concat([self.main.loc[:,[not x for x in self.__string_vars]],
+        return (y,pd.concat([self.main.loc[:,[not x for x in self.__string_vars]],
                           pd.DataFrame(self.enc.transform(self.main.select_dtypes('object')).toarray(),
                                        columns = self.enc.get_feature_names_out(self.main.select_dtypes('object').columns)),],
                          axis=1)) if is_train else pd.concat([self.main.loc[:,[not x for x in self.__string_vars]],
@@ -81,8 +84,9 @@ class initial_data:
                                        columns = self.enc.get_feature_names_out(self.main.select_dtypes('object').columns)),],
                          axis=1)
 
-    def grid_search_catboost(X, y, cat_idx, seed=66):
+    def grid_search_catboost(X, y, seed=66):
         # 8 combinations
+        print('Starting seeking params')
         grid = []
         for depth in [6, 8]:
             for lr in [0.05, 0.1]:
@@ -97,8 +101,8 @@ class initial_data:
             accs, f1s, lls = [], [], []
 
             for tr, va in cv.split(X, y):
-                train_pool = Pool(X.iloc[tr], y.iloc[tr], cat_features=cat_idx)
-                valid_pool = Pool(X.iloc[va], y.iloc[va], cat_features=cat_idx)
+                train_pool = Pool(X.iloc[tr], y.iloc[tr])
+                valid_pool = Pool(X.iloc[va], y.iloc[va])
 
                 model = CatBoostClassifier(
                     loss_function="Logloss",
@@ -154,16 +158,16 @@ class initial_data:
 
 learning = initial_data(learning_vars)
 testing = initial_data(test_vars)
-
+print('Processing learning dataset')
 y,train = learning.preprocessing(is_train=True)
-test = learning.preprocessing(is_train=False)
+print('Processing testing dataset')
+test = testing.preprocessing(is_train=False)
 
 test_uid = test["UID"].copy()
 
 train.drop(columns=["UID"], inplace=True)
 test.drop(columns=["UID"], inplace=True)
-
-best_params, _ = grid_search_catboost(X, y, cat_idx, seed=SEED)
+best_params, _ = initial_data.grid_search_catboost(train, y, seed=66)
 
 # other fixed training params
 base_params = dict(
@@ -171,7 +175,7 @@ base_params = dict(
     iterations=500,
     od_type="Iter",
     od_wait=50,
-    random_seed=SEED,
+    random_seed=66,
     thread_count=-1,
     verbose=False,
     **best_params
