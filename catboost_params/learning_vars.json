@@ -1,1 +1,1 @@
-{"adm": "city_adm.csv", "loc": "city_loc.csv", "pop": "city_pop.csv"}
+{"main" : "learn_dataset.csv","job" : "learn_dataset_job.csv","job_security" : "learn_dataset_JOB_SECURITY.csv", "retired_jobs" : "learn_dataset_retired_jobs.csv", "retired_formers" : "learn_dataset_retired_former.csv","retired_pension" : "learn_dataset_JOB_SECURITY.csv", "sport": "learn_dataset_sport.csv"}
