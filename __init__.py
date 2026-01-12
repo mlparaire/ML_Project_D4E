@@ -4,7 +4,7 @@ import pandas as pd
 from typing import List
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
-from sklearn.model_selection import GridSearchCV,StratifiedShuffleSplit, train_test_split
+from sklearn.model_selection import GridSearchCV,StratifiedShuffleSplit,RepeatedStratifiedKFold, cross_val_score,train_test_split
 from sklearn.metrics import accuracy_score, f1_score, log_loss, confusion_matrix, classification_report
 from sklearn.ensemble import HistGradientBoostingClassifier
 from scipy.sparse import hstack
@@ -25,7 +25,7 @@ class initial_data:
         self.encoder = OneHotEncoder(handle_unknown='ignore',dtype=np.float16)
         self.data_dir : str = os.path.abspath('project-13-files')
 
-        self.dt = HistGradientBoostingClassifier(random_state=0)
+        self.HGB = HistGradientBoostingClassifier(random_state=0)
 
         for var,item in dataset.items():
             setattr(self,var,pd.read_csv(make_path(self.data_dir,item)))
@@ -103,22 +103,39 @@ class initial_data:
     def One_Hot_Encode(self,attribute: str):
         return hstack([getattr(self,attribute).select_dtypes(exclude="object").to_numpy(dtype=np.float32), self.enc.fit_transform(getattr(self,attribute).select_dtypes(include="object"))])
 
-    def Descision_tree_searches(self,attributes:List[str]):
-        v_split = StratifiedShuffleSplit(n_splits=1, train_size=0.7)
-        param_grid = {'max_depth': range(1, 11),
-                      'max_iter': [2, 10, 25, 50, 75, 85, 100, 200],
-                      "min_samples_leaf": [2, 10, 25, 50, 75, 85, 100, 200]}
-        for attribute in attributes:
-            X = self.One_Hot_Encode(attribute)
-            dt_search = GridSearchCV(self.dt, param_grid, cv=v_split, n_jobs=-1)
-            dt_res = dt_search.fit(X.toarray(), getattr(self, attribute+'_target'))
-            return dt_res
-
     @check_if_train
     def get_train_split(self,df,y):
         return train_test_split(
         df, y, test_size=0.2, random_state=66, stratify=y
         )
+
+    def Descision_tree_searches(self,attributes:List[str]):
+        cv = RepeatedStratifiedKFold(n_splits=100, random_state=66)
+        param_grid = []
+        for lr in range(1,11):
+            for depth in range(1,11):
+                for iter in [2, 10, 25, 50, 75, 85, 100, 200]:
+                    for leaf in [2, 10, 25, 50, 75, 85, 100, 200]:
+                        param_grid.append({"learning_rate":lr,"max_depth": depth, "max_iter": iter, "min_samples_leaf": leaf})
+
+        for attribute in attributes:
+            X = self.One_Hot_Encode(attribute)
+            for params in param_grid:
+                print(params)
+                accuracy_scores = []
+                f1_scores = []
+                X_train, X_test, y_train, y_test = train_test_split(X.toarray(), getattr(self,attribute+'_target').to_numpy(), test_size=0.2, random_state=42)
+                HGB= HistGradientBoostingClassifier(**params)
+                for train_index, val_index in cv.split(X_train, y_train):
+                    X_train_fold, X_val_fold = X_train[train_index], X_train[val_index]
+                    y_train_fold, y_val_fold = y_train[train_index], y_train[val_index]
+                    HGB.fit(X_train_fold, y_train_fold)
+                    y_pred = HGB.predict(X_val_fold)
+                    accuracy_scores.append(accuracy_score(y_val_fold, y_pred))
+                    print(accuracy_scores[-1])
+                    f1_scores.append(f1_score(y_val_fold, y_pred,pos_label='S'))
+                    print(f1_scores[-1])
+                    print(confusion_matrix(y_pred,y_val_fold))
 
 ## Prediction
 learning = initial_data(learning_vars,is_train=True)
