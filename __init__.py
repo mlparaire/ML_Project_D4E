@@ -6,8 +6,9 @@ import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.model_selection import GridSearchCV,StratifiedShuffleSplit, train_test_split
 from sklearn.metrics import accuracy_score, f1_score, log_loss, confusion_matrix, classification_report
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import HistGradientBoostingClassifier
+from scipy.sparse import hstack
+
 
 
 test_vars = json.load(open('./catboost_params/test_vars.json',"r"))
@@ -21,10 +22,10 @@ class initial_data:
     def __init__(self,dataset:pd.DataFrame,is_train:bool):
         self.is_train = is_train
         self.has_been_called = True
-        self.encoder = OneHotEncoder(handle_unknown='ignore')
+        self.encoder = OneHotEncoder(handle_unknown='ignore',dtype=np.float16)
         self.data_dir : str = os.path.abspath('project-13-files')
 
-        self.dt = DecisionTreeRegressor(random_state=0)
+        self.dt = HistGradientBoostingClassifier(random_state=0)
 
         for var,item in dataset.items():
             setattr(self,var,pd.read_csv(make_path(self.data_dir,item)))
@@ -99,29 +100,20 @@ class initial_data:
 
         print('Merging Dataset')
 
-    def One_Hot_Encode(self,attributes: List[str]):
-        for attribute in attributes:
-            self.enc.fit(getattr(self, attribute).select_dtypes('object'))
-            setattr(self,attribute,pd.concat([
-                getattr(self,attribute).select_dtypes(exclude="object"),
-                    pd.DataFrame(self.enc.transform(getattr(self,attribute).select_dtypes('object')).toarray(),
-                    columns = self.enc.get_feature_names_out(getattr(self,attribute).select_dtypes('object').columns)
-                )
-                ],axis=1)
-             )
+    def One_Hot_Encode(self,attribute: str):
+        return hstack([getattr(self,attribute).select_dtypes(exclude="object").to_numpy(dtype=np.float32), self.enc.fit_transform(getattr(self,attribute).select_dtypes(include="object"))])
 
     def Descision_tree_searches(self,attributes:List[str]):
         v_split = StratifiedShuffleSplit(n_splits=1, train_size=0.7)
         param_grid = {'max_depth': range(1, 11),
-                      'min_samples_split': [2, 10, 25, 50, 75, 85, 100, 200]}
-
+                      'max_iter': [2, 10, 25, 50, 75, 85, 100, 200],
+                      "min_samples_leaf": [2, 10, 25, 50, 75, 85, 100, 200]}
         for attribute in attributes:
-            self.One_Hot_Encode([attribute])
-            print(getattr(self,attribute))
-            print(getattr(self, attribute+'_target'))
+            X = self.One_Hot_Encode(attribute)
             dt_search = GridSearchCV(self.dt, param_grid, cv=v_split, n_jobs=-1)
-            dt_res = dt_search.fit(getattr(self,attribute), getattr(self, attribute+'_target'))
+            dt_res = dt_search.fit(X.toarray(), getattr(self, attribute+'_target'))
             return dt_res
+
     @check_if_train
     def get_train_split(self,df,y):
         return train_test_split(
