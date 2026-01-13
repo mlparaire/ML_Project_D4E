@@ -4,11 +4,12 @@ import pandas as pd
 from typing import List
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
-from sklearn.model_selection import GridSearchCV,StratifiedShuffleSplit,RepeatedStratifiedKFold, cross_val_score,train_test_split
+from sklearn.model_selection import GridSearchCV,StratifiedKFold,RepeatedStratifiedKFold, cross_val_score,train_test_split
 from sklearn.metrics import accuracy_score, f1_score, log_loss, confusion_matrix, classification_report
 from sklearn.ensemble import HistGradientBoostingClassifier
 from scipy.sparse import hstack
-
+from catboost import CatBoostClassifier, Pool
+from multiprocessing import pool as p
 
 
 test_vars = json.load(open('./catboost_params/test_vars.json',"r"))
@@ -103,6 +104,19 @@ class initial_data:
     def One_Hot_Encode(self,attribute: str):
         return hstack([getattr(self,attribute).select_dtypes(exclude="object").to_numpy(dtype=np.float32), self.enc.fit_transform(getattr(self,attribute).select_dtypes(include="object"))])
 
+    def Col_var_position(self,attribute:str):
+        cat_cols = [c for c in getattr(self,attribute).columns if (getattr(self,attribute)[c].dtype == "object") or str(getattr(self,attribute)[c].dtype).startswith("string")]
+
+        # 2) some code columns to force as categorical
+        force_cat = ["INSEE", "DEP", "Reg", "job_dep", "JOB_SECURITY", "Sports"]
+        for c in force_cat:
+            if c in getattr(self,attribute).columns and c not in cat_cols:
+                cat_cols.append(c)
+
+        # CatBoost requires string type + fillna
+        cat_idx = [getattr(self,attribute).columns.get_loc(c) for c in cat_cols]
+        return cat_cols, cat_idx
+
     @check_if_train
     def get_train_split(self,df,y):
         return train_test_split(
@@ -110,37 +124,125 @@ class initial_data:
         )
 
     def Descision_tree_searches(self,attributes:List[str]):
-        cv = RepeatedStratifiedKFold(n_splits=100, random_state=66)
+        #cv = RepeatedStratifiedKFold(n_splits=10, random_state=66)
         param_grid = []
-        for lr in range(1,11):
-            for depth in range(1,11):
-                for iter in [2, 10, 25, 50, 75, 85, 100, 200]:
-                    for leaf in [2, 10, 25, 50, 75, 85, 100, 200]:
+        for lr in range(5,11):
+            for depth in range(5,11):
+                for iter in [85, 100, 200]:
+                    for leaf in [85, 100, 200]:
                         param_grid.append({"learning_rate":lr,"max_depth": depth, "max_iter": iter, "min_samples_leaf": leaf})
 
         for attribute in attributes:
             X = self.One_Hot_Encode(attribute)
-            for params in param_grid:
-                print(params)
-                accuracy_scores = []
-                f1_scores = []
-                X_train, X_test, y_train, y_test = train_test_split(X.toarray(), getattr(self,attribute+'_target').to_numpy(), test_size=0.2, random_state=42)
-                HGB= HistGradientBoostingClassifier(**params)
-                for train_index, val_index in cv.split(X_train, y_train):
-                    X_train_fold, X_val_fold = X_train[train_index], X_train[val_index]
-                    y_train_fold, y_val_fold = y_train[train_index], y_train[val_index]
-                    HGB.fit(X_train_fold, y_train_fold)
-                    y_pred = HGB.predict(X_val_fold)
-                    accuracy_scores.append(accuracy_score(y_val_fold, y_pred))
-                    print(accuracy_scores[-1])
-                    f1_scores.append(f1_score(y_val_fold, y_pred,pos_label='S'))
-                    print(f1_scores[-1])
-                    print(confusion_matrix(y_pred,y_val_fold))
+            print("start")
+            #for params in param_grid:
+            #    print(params)
+            #    accuracy_scores = []
+            #    f1_scores = []
+            #                X_train, X_test, y_train, y_test = train_test_split(X.toarray(), getattr(self,attribute+'_target').to_numpy(), test_size=0.2, random_state=42)
+            HGB= HistGradientBoostingClassifier()
+            cv = GridSearchCV(HGB,param_grid={'learning_rate':range(5,11),'max_depth':range(5,11),"min_samples_leaf":[85,100,200]})
+            cv.fit(X.toarray(), getattr(self, attribute + '_target').to_numpy())
+            return cv.best_params_
+#                for train_index, val_index in cv.split(X_train, y_train)[1:2]:
+                #   accuracy_scores_reduced = []
+                #   f1_scores_reduced = []
+                #   X_train_fold, X_val_fold = X_train[train_index], X_train[val_index]
+                #   y_train_fold, y_val_fold = y_train[train_index], y_train[val_index]
+                #    HGB.fit(X_train_fold, y_train_fold)
+                #    y_pred = HGB.predict(X_val_fold)
+                #    accuracy_scores_reduced.append(accuracy_score(y_val_fold, y_pred))
+#               #    print(accuracy_scores[-1])
+                #    f1_scores_reduced.append(f1_score(y_val_fold, y_pred,pos_label='S'))
+                #    print(f1_scores[-1])
+                #    print(confusion_matrix(y_val_fold,y_pred,labels=['S','O']))
+                #    print(accuracy_scores_reduced[-1])
+                #    print(f1_scores_reduced[-1])
+                #print('finished cut')
+                #accuracy_scores.append(np.mean(accuracy_scores_reduced))
+                #f1_scores.append(np.mean(f1_scores_reduced))
+        #print(np.max(accuracy_scores))
+        #print(np.max(f1_scores))
+        #return param_grid[np.argmax(accuracy_scores)],param_grid[np.argmax(f1_scores)]
 
+    def Gradient_Boosting_search(self,attributes:List[str]):
+        print('Starting Gradient_Boosting')
+        for attribute in attributes:
+            grid = []
+            for depth in [6, 8]:
+                for lr in [0.05, 0.1]:
+                    for l2 in [3, 7]:
+                        grid.append({"depth": depth, "learning_rate": lr, "l2_leaf_reg": l2})
+            print(f'Grid for {attribute} done')
+            classes = sorted(getattr(self,attribute + '_target').astype(str).unique().tolist())
+            cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=66)
+            cat_cols,cat_idx =  self.Col_var_position(attribute)
+
+            results = []
+            print('Starting grid')
+            for g in grid:
+                accs, f1s, lls = [], [], []
+
+                for tr, va in cv.split(getattr(self,attribute), getattr(self,attribute + '_target')):
+                    print(tr,va)
+                    train_pool = Pool(getattr(self,attribute).iloc[tr], getattr(self,attribute + '_target').iloc[tr], cat_features=cat_idx)
+                    valid_pool = Pool(getattr(self,attribute).iloc[va], getattr(self,attribute + '_target').iloc[va], cat_features=cat_idx)
+
+                    model = CatBoostClassifier(
+                    loss_function="Logloss",
+                    iterations=500,
+                    od_type="Iter",  # early stopping
+                    od_wait=50,
+                    random_seed=66,
+                    thread_count=-1,
+                    verbose=False,
+                    **g
+                )
+                    model.fit(train_pool, eval_set=valid_pool, use_best_model=True)
+
+                    pred = model.predict(valid_pool).astype(str).ravel()
+                    proba = model.predict_proba(valid_pool)
+
+                    y_true = getattr(self,attribute + '_target').iloc[va].astype(str).values
+                    accs.append(accuracy_score(y_true, pred))
+                    f1s.append(f1_score(y_true, pred, average="macro"))
+                    lls.append(log_loss(y_true, proba, labels=classes))
+
+                row = {
+                    **g,
+                    "cv_acc_mean": float(np.mean(accs)),
+                    "cv_f1_macro_mean": float(np.mean(f1s)),
+                    "cv_logloss_mean": float(np.mean(lls)),
+                }
+                results.append(row)
+                print(f"Done {g} | F1={row['cv_f1_macro_mean']:.4f} ACC={row['cv_acc_mean']:.4f} LogLoss={row['cv_logloss_mean']:.4f}")
+
+            res_df = pd.DataFrame(results).sort_values(
+               by=["cv_f1_macro_mean", "cv_logloss_mean"],
+                ascending=[False, True]
+            ).reset_index(drop=True)
+
+            res_df.to_csv("grid_results.csv", index=False)
+            print("Saved grid_results.csv")
+
+            best = res_df.iloc[0].to_dict()
+            best_params = {
+                "depth": int(best["depth"]),
+                "learning_rate": float(best["learning_rate"]),
+                "l2_leaf_reg": float(best["l2_leaf_reg"]),
+            }
+            print("BEST PARAMS:", best_params)
+            print("BEST CV:", {
+                "cv_f1_macro_mean": best["cv_f1_macro_mean"],
+                "cv_acc_mean": best["cv_acc_mean"],
+                "cv_logloss_mean": best["cv_logloss_mean"],
+            })
+        return best_params, res_df
 ## Prediction
 learning = initial_data(learning_vars,is_train=True)
 #testing = initial_data(test_vars,is_train=False)
 
 learning.preprocessing()
 print('Processing testing dataset')
-print(learning.Descision_tree_searches(['main']))
+test = learning.Gradient_Boosting_search(['main'])
+#best_params = learning.Descision_tree_searches(['main'])
