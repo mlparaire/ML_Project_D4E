@@ -4,15 +4,14 @@ import pandas as pd
 from typing import List,Dict
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
-from sklearn.model_selection import GridSearchCV,StratifiedKFold,RepeatedStratifiedKFold, cross_val_score,train_test_split
-from sklearn.metrics import accuracy_score, f1_score, log_loss, confusion_matrix, recall_score, classification_report
-from sklearn.ensemble import HistGradientBoostingClassifier,RandomForestClassifier
-from scipy.sparse import hstack,csr_matrix
+from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.metrics import accuracy_score, f1_score, log_loss, recall_score
 from catboost import CatBoostClassifier, Pool
-from datetime import datetime
 import xgboost as xgb
+from numpy import hstack
 from sklearn.preprocessing import LabelEncoder
-
+from sklearn.ensemble import HistGradientBoostingClassifier,RandomForestClassifier
+import seaborn as sns
 
 
 from matplotlib import pyplot as plt
@@ -49,16 +48,10 @@ class initial_data:
         self.main = self.main.iloc[:,[not x.endswith('_y') for x in self.main.columns]]
         self.main.columns = [x.replace('_x','') for x in self.main.columns]
         self.main=self.main.drop(['X','Y','LAT','Long'],axis=1)
-        self.main = self.main
+
     def __len__(self):
         return len(self.main)
-    def check_if_pred(func):
-        def wrapper(self):
-            if not self.is_train:
-                func(self)
-            else:
-                raise "Impossible on training Dataset"
-        return wrapper
+
     def preprocessing(self):
         self.enc = OneHotEncoder(handle_unknown='ignore')
         if self.is_train:
@@ -113,6 +106,9 @@ class initial_data:
             df[col] = df[col].map(freq_map)
 
         return df.to_numpy(dtype=np.float32)
+
+    def One_Hot_Encode(self,attribute: str):
+        return hstack([getattr(self,attribute).select_dtypes(exclude="object").to_numpy(dtype=np.float32), self.enc.fit_transform(getattr(self,attribute).select_dtypes(include="object")).toarray()])
     def Col_var_position(self,attribute:str):
         cat_cols = [c for c in getattr(self,attribute).columns if (getattr(self,attribute)[c].dtype == "object") or str(getattr(self,attribute)[c].dtype).startswith("string")]
 
@@ -203,10 +199,128 @@ class initial_data:
             json.dump(best_params,open(f'./results/catboost/best_{attribute}_params.json','w'))
 
             json.dump(cv_params,open(f'./results/catboost/{attribute}_params.json','w'))
-            pd.DataFrame(cat_importances,columns=[col for col in getattr(self,attribute).columns]).to_csv(f'./results/catboost/{attribute}_varibales.csv',sep=";",index=False)
+            pd.DataFrame(cat_importances,columns=[col for col in getattr(self,attribute).columns]).to_csv(f'./results/catboost/{attribute}_variables.csv',sep=";",index=False)
 
         yield attribute, cv_params, param_grid[np.argmax(accs)], param_grid[np.argmax(f1s)], param_grid[np.argmax(recalls)]
 
+    def Descision_tree_searches(self,attributes:List[str]):
+        param_grid = []
+        for lr in [6,7,8]:
+            for depth in range(5,11):#range(5,11):
+                for iter in [85, 100, 200]:
+                    for leaf in [20, 50, 100]:
+                        param_grid.append({"learning_rate":lr,"max_depth": depth, "max_iter": iter, "min_samples_leaf": leaf})
+                for attribute in attributes:
+                    print(attribute)
+                    cv_params = {'params': [], 'Accuracy': [], 'F1': [], 'recall_score': [],
+                                 'score': []}  # 'confusion_matrix': []}
+                    X = self.One_Hot_Encode(attribute)
+                    print("start")
+                    for params in param_grid:
+                        print(params)
+                        accuracy_scores, f1_scores, recall_score_scores, scores = [], [], [], []
+                        X_train, X_test, y_train, y_test = train_test_split(X.toarray(), getattr(self,
+                                                                                                 attribute + '_target').to_numpy(),
+                                                                            test_size=0.2, random_state=42)
+                        cv = StratifiedKFold(n_splits=10, random_state=66)
+                        for train_index, val_index in cv.split(X_train, y_train):
+                            accuracy_scores_reduced, f1_scores_reduced, recall_score_reduced, scores_r = [], [], [], []
+                            X_train_fold, X_val_fold, y_train_fold, y_val_fold = X_train[train_index], X_train[
+                                val_index], y_train[train_index], y_train[val_index]
+                            HGB = HistGradientBoostingClassifier(
+                                random_state=66,
+                                max_iter=500,
+                                early_stopping=True,
+                                validation_fraction=0.1,
+                                **params)
+                            HGB.fit(X_train_fold, y_train_fold)
+                            y_pred = HGB.predict(X_val_fold)
+
+                            accuracy_scores_reduced.append(accuracy_score(y_val_fold, y_pred))
+                            f1_scores_reduced.append(f1_score(y_val_fold, y_pred, pos_label='S'))
+                            recall_score_reduced.append(recall_score(y_val_fold, y_pred, pos_label='S'))
+                            scores_r.append(HGB.score(X_test, y_test))
+                        accuracy_scores.append(np.mean(accuracy_scores_reduced))
+                        f1_scores.append(np.mean(f1_scores_reduced))
+                        recall_score_scores.append(np.mean(recall_score_reduced))
+                        scores.append(np.mean(scores_r))
+                        cv_params['params'].append(params)
+                        cv_params['Accuracy'].append(accuracy_scores[-1])
+                        cv_params['F1'].append(f1_scores[-1])
+                        cv_params['recall_score'].append(recall_score_scores[-1])
+                        cv_params['score'].append(scores[-1])
+            print(accuracy_scores)
+            print(f1_scores)
+            best_params = {'Best Accuracy' : param_grid[np.argmax(accuracy_scores)],'Best F1' :param_grid[np.argmax(f1_scores)],
+                       'Best Recall': param_grid[np.argmax(recall_score_scores)],
+                       'Best Score':param_grid[np.argmax(scores)]}
+
+            json.dump(best_params,open(f'./results/HGB/best_{attribute}_params.json','w'))
+
+            json.dump(cv_params,open(f'./results/HGB/{attribute}_params.json','w'))
+        yield attribute, cv_params,param_grid[np.argmax(accuracy_scores)],param_grid[np.argmax(f1_scores)],param_grid[np.argmax(recall_score)],param_grid[np.argmax(scores)]
+
+
+    def Random_ForestClassifier(self,attributes:List[str]):
+        print('Starting RandomForest_classifier')
+        cv_params = {'params': [], 'Accuracy': [], 'F1': [], 'recall_score': [],
+                     'score': []}  # , 'confusion_matrix': []}
+        param_grid = []
+        for max_depth in [None, 6, 10]:
+            for min_leaf in [1, 5, 20]:
+                for max_features in ["sqrt", 0.5]:
+                    for max_samples in [0.7, 1.0]:
+                        param_grid.append({
+                            "n_estimators": 300,
+                            "max_depth": max_depth,
+                            "min_samples_leaf": min_leaf,
+                            "max_features": max_features,
+                            "max_samples": max_samples
+                        })
+                for attribute in attributes:
+                    X = self.One_Hot_Encode(attribute)
+                    print("start")
+                    for params in param_grid:
+                        print(params)
+                        accuracy_scores, f1_scores, recall_score_scores, scores = [], [], [], []
+                        X_train, X_test, y_train, y_test = train_test_split(X.toarray(), getattr(self,attribute + '_target').to_numpy(),test_size=0.2, random_state=42)
+                        cv = StratifiedKFold(n_splits=10, random_state=66)
+                        for train_index, val_index in cv.split(X_train, y_train):
+                            accuracy_scores_reduced, f1_scores_reduced, recall_score_reduced, scores_r = [], [], [], []
+                            X_train_fold, X_val_fold, y_train_fold, y_val_fold = X_train[train_index], X_train[
+                                val_index], y_train[train_index], y_train[val_index]
+                            RFC = RandomForestClassifier(
+                                random_state=0,
+                                **params)
+                            RFC.fit(X_train_fold, y_train_fold)
+
+                            y_pred = RFC.predict(X_val_fold)
+
+                            accuracy_scores_reduced.append(accuracy_score(y_val_fold, y_pred))
+                            f1_scores_reduced.append(f1_score(y_val_fold, y_pred, pos_label='S'))
+                            recall_score_reduced.append(recall_score(y_val_fold, y_pred, pos_label='S'))
+                            scores_r.append(RFC.score(X_test, y_test))
+                        accuracy_scores.append(np.mean(accuracy_scores_reduced))
+                        f1_scores.append(np.mean(f1_scores_reduced))
+                        recall_score_scores.append(np.mean(recall_score_reduced))
+                        scores.append(np.mean(scores_r))
+                        cv_params['params'].append(params)
+                        cv_params['Accuracy'].append(accuracy_scores[-1])
+                        cv_params['F1'].append(f1_scores[-1])
+                        cv_params['recall_score'].append(recall_score_scores[-1])
+                        cv_params['score'].append(scores[-1])
+
+                    print(accuracy_scores)
+                    print(f1_scores)
+                    best_params = {'Best Accuracy': param_grid[np.argmax(accuracy_scores)],
+                                   'Best F1': param_grid[np.argmax(f1_scores)],
+                                   'Best Recall': param_grid[np.argmax(recall_score_scores)],
+                                   'Best Score': param_grid[np.argmax(scores)]}
+
+                    json.dump(best_params, open(f'./results/RFC/best_{attribute}_params.json', 'w'))
+
+                    json.dump(cv_params, open(f'./results/RFC/{attribute}_params.json', 'w'))
+                yield attribute, cv_params, param_grid[np.argmax(accuracy_scores)], param_grid[np.argmax(f1_scores)],param_grid[np.argmax(recall_score)], param_grid[np.argmax(scores)]
 
     def XGBoosting_search(self,attributes:List[str]):
         print('Starting XGBoosting')
@@ -496,12 +610,17 @@ class initial_data:
 
         return df_results, df_summary
 
-    @check_if_pred
-    def Make_prediction(self,attributes: List[str],best_overals = None):
-        if best_overals is None:
-            best_overals = json.load(open('./best_model_winner.json'))
+    def plot_performances(self,attributes:List[str]):
         for attribute in attributes:
-            print(best_overals[attribute])
+            for algo in ['catboost','XGboost']:
+                results = json.load(open(f'./results/{algo}/{attribute}_params.json'))
+                x_axis = [str(val) for val in results['params']]
+
+                y_accuracy = results['Accuracy']
+                plt.plot(x_axis,y_accuracy)
+                plt.xticks(rotation=45)
+                plt.show()
+
 
 ## Training
 learning = initial_data(learning_vars,is_train=True)
@@ -514,16 +633,19 @@ print('Processing testing dataset')
 testing.preprocessing()
 
 print('Now computing best models')
-for XGB in learning.XGBoosting_search(['main','student','retiree','unemployed']):
-    print(XGB)
-for grad_model in learning.Gradient_Boosting_search(['main','student','retiree','unemployed']):
-    print(grad_model)
 
-learning.export_comparison_report()
+#for XGB in learning.XGBoosting_search(['main','student','retiree','unemployed']):
+#    print(XGB)
+#for grad_model in learning.Gradient_Boosting_search(['main','student','retiree','unemployed']):
+#    print(grad_model)
 
-best_overall = learning.export_best_overall_parameters(
-        ['main','student','retiree','unemployed'],
-        output_file='./best_model_winner.json'
-    )
+#learning.export_comparison_report(attributes=['main','student','retiree','unemployed'])
 
-testing.Make_prediction(best_overall)
+#best_overall = learning.export_best_overall_parameters(
+#        ['main','student','retiree','unemployed'],
+#        output_file='./best_model_winner.json'
+#    )
+#print(best_overall)
+best_overall = None
+#testing.plot_performances(['main','student','retiree','unemployed'])
+testing.plot_performances(['main'])
